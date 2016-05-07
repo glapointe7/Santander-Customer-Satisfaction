@@ -1,0 +1,478 @@
+# 1 Introduction
+From frontline support teams to C-suites, customer satisfaction is a key measure of success. Unhappy customers don't stick around. What's more, unhappy customers rarely voice their dissatisfaction before leaving.
+
+Santander Bank (https://www.santanderbank.com/us/personal) is asking Kagglers to help them identify dissatisfied customers early in their relationship. Doing so would allow Santander to take proactive steps to improve a customer's happiness before it's too late.
+
+In this competition, we'll work with hundreds of anonymized features to predict if a customer is satisfied or dissatisfied with their banking experience.
+
+
+## 1.1 What to Predict
+The task is to predict the probability that each customer in the test set is an unsatisfied customer.
+The "TARGET" column is the variable to predict. It equals 
+
+* 1 for unsatisfied customers and 
+* 0 for satisfied customers.
+
+As a first step to this analysis, we will identify possible features that influance if the customer is satisfied or not. We will also ask questions about the dataset where the answers to these questions will help us to choose the right machine learning algorithms. Since we are predicting the satisfaction of the customer, a binary classification, we will use a logistic regression algorithm.
+
+
+## 1.2 Quality of the dataset
+In this dataset, there is no codebook explaining features and how the data have been measured. The feature names are poorly descriptive (e.g. var38). Moreover, this makes the data harder to understand. Thus, it's difficult to catch wrong values in the dataset. This will make our work much harder to answer a question like: "What makes a customer unsatisfy with its banking experience?". This will certainly have a negative impact on the prediction we have to do. At least, we deduce that each observation represents a customer of the Santander bank.
+
+
+## 1.3 General Observations
+
+* We have 370 features (removing the TARGET)
+* We have 76020 observations in the train set
+* We have 75818 observations in the test set
+* Words used: imp, ent, sal, op, num (number), delta, saldo (balance), corto (short), medio (medium), largo (long), amort, aport, compra (purchase), ult, reemb (reimbursement), trasp, ind, meses (months), med, hace (ago), comer (commercial), efect (effective), cte, in, out, 1y3, venta (sale), recib (receipt), emit, vig
+* There are many zeros in the dataset.
+* Some features seem to have the same value for all observations (rows).
+* Some features seem to be duplicates of others.
+* The unsatisfied customers seem to have more zeros than the others.
+* All data seem numeric.
+* Some features depend on other. (e.g. `num_op_var41_ult3 = num_op_var41_ult1 + num_op_var41_hace3 + num_op_var41_hace2`)
+* The percentage of dissatisfied customers in the dataset seems low.
+
+
+## 1.4 Features Translated Estimation
+The following are taken from Kaggle forum:
+
+* imp_ent_varX => importe entidad => amount for the bank office
+
+* imp_op_varX_comer => importe opcion comercial => amount for commercial option
+
+* imp_sal_varX => importe salario => amount for wage
+
+* ind_varX_corto => indicador corto => short (time lapse?) indicator/dummy
+
+* ind_varX_medio => indicador medio => medium-sized (time lapse?) indicator/dummy
+
+* ind_varX_largo => indicador largo => long-sized (time lapse?) indicator/dummy
+
+* saldo_varX => saldo => balance
+
+* delta_imp_amort_varX_1y3 => importe amortización 1 y 3 => amount/price for redemption (?) 1 and 3
+
+* delta_imp_aport_varX_1y3 => importe aportación 1 y 3 => amount/price for contribution (?) 1 and 3
+
+* delta_imp_reemb_varX_1y3 => importe reembolso 1 y 3 => amount/price for refund 1 and 3
+
+* delta_imp_trasp_varX_out_1y3 => importe traspaso 1 y 3 => amount/price for transfer 1 and 3
+
+* imp_venta_varX => importe venta => sale fee.
+
+* ind_varX_emit_ult1 => indicador emitido => indicator of emission
+
+* ind_varX_recib_ult1 => indicador recibido => indicator of reception
+
+* num_varX_hace2 => número hace 2 => number [of variable X ] done two units in the past
+
+* num_med_varX => número medio => mean number [of variable X]
+
+* num_meses_varX => número de meses => number of months [for variable X]
+
+* saldo_medio_varX => saldo medio => average balance
+
+* delta_imp_venta_varX_1y3 = > importe de venta 1 y 3 => fee on sales [for variable X] 1 and 3
+
+
+## 1.5 Questions
+To archieve our goal of predicting the satisfaction of customers with a good area under the curve (AUC), we need to answer the following questions.
+
+* What features have unique value in the dataset?
+* What features are the most important on the satisfaction of the customers?
+* Do we have highly correlated features?
+* Do we have dependant features?
+* What is the optimal threshold to determine if a customer is satisfied or not?
+* Can we make decision branches with those data?
+* What make a customer dissatisfied of his bank?
+
+
+# 2  Simplifying the Dataset
+The objective of this section is to reduce the number of features. We will remove features having unique values which will not improve the prediction. We will also remove duplicated and highly correlated features.
+
+
+## 2.1 Load Train and Test Datasets
+We first load the test and train datasets, and set the seed.
+
+```{r echo = TRUE, message = FALSE, warning = FALSE}
+## Load all features of the train or test set and set the seed.
+train <- read.csv("train.csv")
+test <- read.csv("test.csv")
+set.seed(1234)
+options(scipen = 999)
+```
+
+We remove the `ID` and keep a copy of the `TARGET` feature before removing it.
+
+```{r echo = TRUE, message = FALSE, warning = FALSE}
+test.id <- test$ID
+label <- train$TARGET
+train$ID <- NULL
+test$ID <- NULL
+train$TARGET <- NULL
+```
+
+We load required libraries for this entire document.
+
+```{r echo = TRUE, message = FALSE, warning = FALSE}
+library(ggplot2)
+library(caret)
+library(xgboost)
+library(methods)
+library(Matrix)
+library(pROC)
+```
+
+
+## 2.2 Removing 0-Variance Features
+We also remove features with 0 variance. This means that all features containing the same value for all observations are removed.
+
+```{r echo = TRUE, message = FALSE, warning = FALSE}
+zero.variance <- nearZeroVar(train, saveMetrics = TRUE) 
+features.remove <- which(zero.variance$zeroVar == TRUE)
+if(length(features.remove) > 0)
+{
+    cat("Features with 0-Variance: ", names(train[, features.remove]), sep = "\n")
+    cat("\n\nTotal of features removed:", length(train[, features.remove]))
+    
+    train <- train[, -features.remove]
+    test <- test[, -features.remove]
+}
+```
+
+
+## 2.3 Removing Highly Correlated Features
+We remove the highly correlated features (near 1) from the train and test sets.
+
+```{r echo = TRUE, message = FALSE, warning = FALSE}
+features.remove <- findCorrelation(cor(train), cutoff = 0.999, verbose = FALSE)
+
+if(length(features.remove) > 0)
+{
+    cat("Features highly correlated removed: ", names(train[, features.remove]), sep = "\n")
+    cat("Total of features removed:", length(train[, features.remove]))
+    
+    train <- train[, -features.remove]
+    test <- test[, -features.remove]
+}
+```
+
+
+## 2.4 Linear Combination Features
+We find all features that are a linear combination of other features. The goal is to not use them to state that a customer is always satisfied if a certain threshold is respected. We need independant features that have direct effects on the customer's satisfaction.
+
+```{r echo = TRUE, message = FALSE, warning = FALSE}
+features.remove <- findLinearCombos(train)
+
+if(length(features.remove$remove) > 0)
+{
+    print(features.remove$linearCombos)
+    cat("\n\nLinear Combination Features: ", names(train[, features.remove$remove]), sep = "\n")
+    cat("Total of features found:", length(train[, features.remove$remove]))
+}
+```
+
+
+# 3. Feature Engineering & Visualization
+In this section, we will see which features can be used to clearly identified the dissatisfied customers. We will try with many features to see which one can be set to zero (satisfied) with a certain condition. Our first strategy is to check every feature in the remaining set that are not a linear combination of other features and are not indicators where their values are 0 or 1. Therefore, independant variables are the key to set a customer as satisfied given a threshold which is generally determined by the max and min of the feature's values.
+
+The percentage of dissatisfied customers in the train set is very low.
+
+```{r echo = TRUE, message = FALSE, warning = FALSE}
+dissatisfied.count <- sum(label)
+percentage <- dissatisfied.count / 76020 * 100
+cat("Dissatisfied customers represent", percentage, "% of the train set.")
+```
+
+Our second strategy is to get the range where dissatisfied customers exist for a given feature. With this strategy, we can suppose that customers that are not in this range are automatically satisfied for a given feature. We use this hypothesis based on the train set to predict the satisfaction in the test set. It is possible that the train set is not representative of the test set for some features. Therefore, we have to test our hypothesis for each feature. This cannot be used as a proof since in a different test set, our hypothesis can be false most of the time.
+
+
+## 3.1 Adding Number of Zeros for each Observation
+We add the feature 'number_of_zeros' since we noticed that an unsatisfied customer seems to have more zeros that a satisfied one. This new feature is shown in the most important features histogram in the next section.
+
+```{r echo = TRUE, message = FALSE, warning = FALSE}
+## Count the number of zeros for the observation x and add the sum as a new feature.
+CountNumberOfZeros <- function(x) 
+{
+    return(sum(x == 0))
+}
+
+train$number_of_zeros <- apply(train, 1, FUN = CountNumberOfZeros)
+test$number_of_zeros <- apply(test, 1, FUN = CountNumberOfZeros)
+```
+
+
+## 3.2 Looking at var3
+We can see that `2` is the most frequent value. However, the value `-999999` seems to be an error code or simply the equivalent of `NA`. We replace this value by the most common one which is `2`.
+
+```{r echo = FALSE, message = FALSE, warning = FALSE}
+train.var3 <- train$var3
+var3.frequencies <- as.data.frame(sort(table(train.var3), decreasing = TRUE))
+print(var3.frequencies[var3.frequencies > 100, ])
+
+train[train$var3 == -999999, "var3"] <- 2
+test[test$var3 == -999999, "var3"] <- 2
+
+print(ggplot(train, aes(x = var3 , y = label, color = factor(label))) 
+    + geom_point(size = 4)
+    + xlab("var3")
+    + ylab("Satisfied?")
+    + ggtitle("Satisfaction of the customer based on var38")
+    + scale_x_continuous(breaks = seq(0, max(train$var3), by = 20)) 
+    + scale_color_discrete("Customer Satisfaction", labels = c("Satisfied","Dissatisfied"))
+    + theme(legend.position = "bottom"))
+```
+
+
+## 3.3 Looking at var38
+We can see in the dataset that the value `117310.979016494` seems to appear many times compare to any other value.
+
+```{r echo = FALSE, message = FALSE, warning = FALSE}
+print(summary(train$var38))
+cat("Number of observations where var38 = 117310.979016494: ", nrow(train[train$var38 == 117310.979016494, ])) 
+    
+hist(train$var38)
+```
+
+Applying the natural logarithm on `var38`, we can see the normal distribution. Assuming that `var38` is the customer value, this makes sense to get the normal distribution. Since we have poor and rich customers, this feature should follow the normal distribution.
+
+```{r echo = FALSE, message = FALSE, warning = FALSE}
+hist(log(train$var38))
+```
+
+Above histogram suggests we split up `var38` into two variables. We add the feature `var38_common` which is equal to 1 when `var38` equals to `117310.979016494`, the most common value, and 0 otherwise. We also add the feature `var38_ln` which is equal to `ln(var38)` if `var38` is not the most common value, otherwise 0. Note that `ln(x)` means the natural logarithm of x. 
+
+```{r echo = FALSE, message = FALSE, warning = FALSE}
+train$var38_common <- train$var38 == 117310.979016494
+train$var38_ln <- ifelse(train$var38_common == 0, log(train$var38), 0)
+hist(train$var38_ln)
+
+test$var38_common <- test$var38 == 117310.979016494
+test$var38_ln <- ifelse(test$var38_common == 0, log(test$var38), 0)
+
+print(ggplot(train, aes(x = var38, y = label, color = factor(label))) 
+    + geom_point(size = 4)
+    + ggtitle("var38 in M$ for dissatisfied and satisfied customers")
+    + scale_x_continuous(breaks = round(seq(min(train$var38) / 1000000, max(train$var38) / 1000000, by = 2), 0)) 
+    + scale_color_discrete("Customer Satisfaction", labels = c("Satisfied","Dissatisfied")) 
+    + theme(legend.position = "bottom"))
+
+var38 <- test$var38
+```
+
+From the graph, we can see that the dissatisfied customers start at `r max(train[which(label == 1), "var38"])` $. We will consider this in our final prediction (see the last section about Prediction).
+
+
+## 3.4 Looking at var15
+At section Prediction, we will see that `var15` is the most important feature for our prediction. Let's take a look at this feature.
+
+```{r echo = FALSE, message = FALSE, warning = FALSE}
+print(summary(train$var15))
+    
+hist(train$var15)
+
+print(ggplot(train, aes(x = var15, y = label, color = factor(label))) 
+    + geom_point(size = 5)
+    + ggtitle("var15 for dissatisfied and satisfied customers")
+    + scale_x_continuous(breaks = round(seq(min(train$var15), max(train$var15), by = 10), 0)) 
+    + scale_color_discrete("Customer Satisfaction", labels = c("Satisfied","Dissatisfied")) 
+    + theme(legend.position = "bottom"))
+
+var15 <- test$var15
+```
+
+From the summary, the range of `var15` is between `r min(train$var15)` and `r max(train$var15)`. This could make sense that `var15` represents the age of the customer. Supposing that `var15` is the age, then customers younger than `r min(train[which(label == 1), "var15"])` years old and older than `r max(train[which(label == 1), "var15"])` years old sre always satisfied based on the train and test sets. We will consider this in our final prediction (see the last section about Prediction).
+
+
+## 3.5 Other Features
+The following features have been tested with the AUC score and they improved the score.
+
+```{r echo = FALSE, message = FALSE, warning = FALSE}
+var21 <- test$var21
+var36 <- test$var36
+
+saldo_medio_var5_hace2 <- test$saldo_medio_var5_hace2
+saldo_var13_largo <- test$saldo_var13_largo
+saldo_medio_var5_ult1 <- test$saldo_medio_var5_ult1
+saldo_medio_var5_ult3 <- test$saldo_medio_var5_ult3
+saldo_medio_var13_largo_ult1 <- test$saldo_medio_var13_largo_ult1
+saldo_var33 <- test$saldo_var33
+saldo_var30 <- test$saldo_var30
+saldo_var5 <- test$saldo_var5
+saldo_var8 <- test$saldo_var8
+saldo_var14 <- test$saldo_var14
+saldo_var17 <- test$saldo_var17
+saldo_var26 <- test$saldo_var26
+
+num_var30 <- test$num_var30
+num_var13_0 <- test$num_var13_0
+num_var33_0 <- test$num_var33_0
+num_var37_0 <- test$num_var37_0
+num_var20_0 <- test$num_var20_0
+num_var5_0 <- test$num_var5_0
+num_var17_0 <- test$num_var17_0
+num_var13_largo_0 <- test$num_var13_largo_0
+num_meses_var13_largo_ult3 <- test$num_meses_var13_largo_ult3
+
+imp_op_var40_comer_ult1 <- test$imp_op_var40_comer_ult1
+imp_op_var39_efect_ult3 <- test$imp_op_var39_efect_ult3
+num_op_var39_comer_ult3 <- test$num_op_var39_comer_ult3
+num_op_var39_comer_ult1 <- test$num_op_var39_comer_ult1
+imp_ent_var16_ult1 <- test$imp_ent_var16_ult1
+imp_trans_var37_ult1 <- test$imp_trans_var37_ult1
+
+var_33_44 <- test$num_var33 + test$saldo_medio_var33_ult3 + test$saldo_medio_var44_hace2 + test$saldo_medio_var44_hace3 +
+             test$saldo_medio_var33_ult1 + test$saldo_medio_var44_ult1
+vars <- test$var15 + test$num_var45_hace3 + test$num_var45_ult3 + test$var36
+numvar_4_5 <- test$num_var4 + test$num_var5
+```
+
+
+# 4. Extreme Gradient Boosted Regression Trees
+From our observations, we noticed that there are many zeros in the train and test sets. To get a better idea, we calculate the percentage of zeros versus other numbers in the train dataset.
+
+```{r echo = FALSE, message = FALSE, warning = FALSE}
+print(summary(colSums(train == 0) / nrow(train) * 100))
+print(summary(colSums(test == 0) / nrow(test) * 100))
+```
+
+Since the percentage of zeros is high, it's preferable to use sparse matrices to store the datasets.
+
+
+## 4.1 Fine Tuning Parameters
+We prepare the parameters and matrices for the cross-validation and final prediction. We first remove the less important feature.
+
+```{r echo = TRUE, message = FALSE, warning = FALSE}
+train$imp_compra_var44_ult1 <- NULL
+test$imp_compra_var44_ult1 <- NULL
+
+train$TARGET <- label
+train <- sparse.model.matrix(TARGET ~ ., data = train)
+train_matrix <- xgb.DMatrix(train, label = label)
+
+param <- list(objective        = "binary:logistic", 
+              booster          = "gbtree",
+              eta              = 0.01861, # Control the learning rate
+              subsample        = 0.68,    # Subsample ratio of the training instance
+              max_depth        = 5,       # Maximum depth of the tree
+              colsample_bytree = 0.7,     # Subsample ratio of columns when constructing each tree
+              eval_metric      = "auc")
+```
+
+
+### 4.2 Cross-Validation
+We use the XGBoost with binary logistic algorithm and do a cross-validation to get the optimal number of trees and AUC score. Since we have more than 100 features, then the AUC of the training set should be close to the testing set.
+
+```{r echo = FALSE, message = FALSE, warning = FALSE}
+### Cross-Validation
+cv.nfolds <- 5
+cv.nrounds <- 600
+model.cv <- xgb.cv(data     = train_matrix, 
+                   nfold    = cv.nfolds, 
+                   param    = param, 
+                   nrounds  = cv.nrounds, 
+                   verbose  = 0)
+model.cv$names <- as.integer(rownames(model.cv))
+
+print(ggplot(model.cv, aes(x = names, y = test.auc.mean)) + 
+      geom_line() + 
+      ggtitle("Training AUC using 5-fold CV") + 
+      xlab("Number of trees") + 
+      ylab("AUC"))
+     
+print(model.cv)
+best <- model.cv[model.cv$test.auc.mean == max(model.cv$test.auc.mean), ]
+cat("\nOptimal testing set AUC score:", best$test.auc.mean)
+cat("\nInterval testing set AUC score: [", best$test.auc.mean - best$test.auc.std, ", ", best$test.auc.mean + best$test.auc.std, "].")
+cat("\nDifference between optimal training and testing sets AUC:", best$train.auc.mean - best$test.auc.mean)
+cat("\nOptimal number of trees:", best$names)
+```
+
+
+### 4.3 Prediction
+We proceed to the predictions of the test set with 524 trees. After testing, this number of trees seems to be optimal with the parameters given above.
+
+```{r echo = FALSE, message = FALSE, warning = FALSE}
+system.time({
+    nrounds <- 524 #as.integer(best$names)
+    
+    model = xgboost(param = param, 
+                      train_matrix, 
+                      nrounds = nrounds,
+                      verbose = 0)
+    
+    test$TARGET <- -1
+    test <- sparse.model.matrix(TARGET ~ ., data = test)
+    prediction.test <- predict(model, test)
+    prediction.train <- predict(model, train)
+    
+    #Check which features are the most important.
+    names <- dimnames(train)[[2]]
+    importance_matrix <- xgb.importance(names, model = model)
+    print(importance_matrix)
+    
+    # Display the top 25 features importance.
+    print(xgb.plot.importance(importance_matrix[1:25, ]))
+})
+```
+
+
+### 4.4 Satisfied Customers Threshold
+We state that a customer is always satisfied depending on a threshold found in the previous section and tested with the AUC score. This way to predict should not be used because if in another test set we have customers younger than 23 years old dissatisfied, this will contradict this method.
+
+```{r echo = TRUE, message = FALSE, warning = FALSE}
+prediction.test[var15 < 23 | var15 > 102] <- 0
+prediction.test[saldo_medio_var5_hace2 > 165500.01] <- 0
+prediction.test[saldo_medio_var5_ult1 > 84000] <- 0
+prediction.test[saldo_medio_var5_ult3 > 108250.02] <- 0
+prediction.test[saldo_medio_var13_largo_ult1 > 0] <- 0
+prediction.test[saldo_var13_largo > 150000] <- 0
+prediction.test[var38 > 3988595.1] <- 0
+prediction.test[var21 > 7500] <- 0
+prediction.test[var36 == 0] <- 0
+prediction.test[saldo_var33 > 0] <- 0
+prediction.test[saldo_var5 > 137614.62] <- 0
+prediction.test[saldo_var14 > 19053.78] <- 0
+prediction.test[saldo_var17 > 288188.97] <- 0
+prediction.test[saldo_var26 > 10381.29] <- 0
+prediction.test[saldo_var8 > 60098.49] <- 0
+prediction.test[imp_trans_var37_ult1 > 483003] <- 0
+prediction.test[imp_ent_var16_ult1 > 51003] <- 0
+prediction.test[imp_op_var39_efect_ult3 > 14010] <- 0
+prediction.test[imp_op_var40_comer_ult1 > 3639.87] <- 0
+
+prediction.test[num_var30 > 9] <- 0
+prediction.test[num_var13_0 > 6] <- 0
+prediction.test[num_var33_0 > 0] <- 0
+prediction.test[num_var37_0 > 45] <- 0
+prediction.test[num_var5_0 > 6] <- 0
+prediction.test[num_var20_0 > 0] <- 0
+prediction.test[num_var17_0 > 21] <- 0
+prediction.test[num_op_var39_comer_ult3 > 204] <- 0
+prediction.test[num_op_var39_comer_ult1 > 129] <- 0
+prediction.test[num_meses_var13_largo_ult3 > 0] <- 0
+prediction.test[num_var13_largo_0 > 3] <- 0
+
+prediction.test[var_33_44 > 0] <- 0
+prediction.test[vars <= 24] <- 0
+prediction.test[numvar_4_5 > 9] <- 0
+```
+
+
+## 4.5 Area Under Curve (AUC)
+We can verify how our predictions score under the AUC. We take our predictions applied to the train set and we compare to the real `TARGET` values of the train set.
+
+```{r echo = FALSE, message = FALSE, warning = FALSE}
+cat("AUC =", auc(as.numeric(label), as.numeric(prediction.train)))
+```
+
+
+## 4.6 Submission
+We write the `ID` and the predicted values as the `TARGET` in the submission file.
+
+```{r echo = TRUE, message = FALSE, warning = FALSE}
+submission <- data.frame(ID = test.id, TARGET = prediction.test)
+write.csv(submission, "Submission.csv", row.names = FALSE)
+```
